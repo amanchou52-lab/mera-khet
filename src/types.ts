@@ -115,6 +115,16 @@ export interface ResourceNode {
   regenTicks: number; // ticks left to regenerate when empty
 }
 
+// Map resource node type to regeneration cooldown duration (60 ticks = 1 second)
+export function getNodeRegenTicks(type: string): number {
+  if (type.includes('tree')) return 1800; // 30s
+  if (type === 'stone') return 2400; // 40s
+  if (type === 'iron') return 3600; // 60s
+  if (type === 'silver') return 4800; // 80s
+  if (type === 'gold') return 6000; // 100s
+  return 1800;
+}
+
 // Upgrades cost mapping
 export interface ToolUpgradeInfo {
   tier: ToolTier;
@@ -144,6 +154,26 @@ export interface Inventory {
   chili: number;
   eggplant: number;
 }
+
+// Logical limits for each resource to prevent infinite stockpiling
+export const RESOURCE_LIMITS: Record<keyof Inventory, number> = {
+  gold: 25000,
+  wood: 250,
+  stone: 250,
+  iron_ore: 100,
+  silver_ore: 100,
+  gold_ore: 100,
+  potatoSeed: 50,
+  tomatoSeed: 50,
+  onionSeed: 50,
+  chiliSeed: 50,
+  eggplantSeed: 50,
+  potato: 55, // 5 extra to permit smooth single farm harvests
+  tomato: 55,
+  onion: 55,
+  chili: 55,
+  eggplant: 55,
+};
 
 // Game Settings & Stats
 export interface GameStats {

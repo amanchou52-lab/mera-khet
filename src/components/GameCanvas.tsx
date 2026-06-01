@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { GameEngine, FloatingText } from '../utils/gameEngine';
 import { initializeAssets, PixelAssets } from '../utils/assets';
 import { TILE_SIZE, GRID_WIDTH, GRID_HEIGHT } from '../data';
-import { NPC, CropPlot, ResourceNode } from '../types';
+import { NPC, CropPlot, ResourceNode, getNodeRegenTicks } from '../types';
 import { Play, Pause, MousePointerClick, RefreshCw, Layers } from 'lucide-react';
 
 interface GameCanvasProps {
@@ -187,13 +187,32 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
               ctx.fillRect(node.x * TILE_SIZE + 6, node.y * TILE_SIZE + 22, 20, 4);
             }
             
-            // Show respawn timer ring
-            ctx.fillStyle = 'rgba(255,255,255,0.2)';
-            ctx.fillRect(node.x * TILE_SIZE + 4, node.y * TILE_SIZE + 4, 24, 2);
-            ctx.fillStyle = '#4ade80';
-            const maxRegen = node.type.includes('tree') ? 360 : 480;
+            // Show premium circular countdown timer representing remaining seconds
+            const maxRegen = getNodeRegenTicks(node.type);
             const progress = (maxRegen - node.regenTicks) / maxRegen;
-            ctx.fillRect(node.x * TILE_SIZE + 4, node.y * TILE_SIZE + 4, progress * 24, 2);
+            const secondsLeft = Math.ceil(node.regenTicks / 60);
+
+            // Draw circular semi-transparent backup frame
+            ctx.fillStyle = 'rgba(15, 10, 8, 0.75)';
+            ctx.beginPath();
+            ctx.arc(node.x * TILE_SIZE + 16, node.y * TILE_SIZE + 16, 11, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Progress outline
+            ctx.strokeStyle = '#4ade80';
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + (progress * Math.PI * 2);
+            ctx.arc(node.x * TILE_SIZE + 16, node.y * TILE_SIZE + 16, 11, startAngle, endAngle);
+            ctx.stroke();
+
+            // Central readable mono text countdown
+            ctx.font = 'bold 9px monospace';
+            ctx.fillStyle = '#facc15';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${secondsLeft}s`, node.x * TILE_SIZE + 16, node.y * TILE_SIZE + 16);
           }
         });
 
@@ -248,12 +267,22 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             Math.floor(npc.walkFrame),
             npc.toolTier
           );
-          // Drawn at smoothed float position offset
+          
+          // Subtle shake/shaking offset if working
+          let shakeX = 0;
+          let shakeY = 0;
+          if (npc.state === 'working') {
+            // High frequency vibration/sawtooth oscillation for visual feedback
+            shakeX = Math.sin(Date.now() * 0.05) * 1.5;
+            shakeY = Math.cos(Date.now() * 0.06) * 1.0;
+          }
+
+          // Drawn at smoothed float position offset (with optional working shake)
           // we align them so they stand centered on tiles
           ctx.drawImage(
             npcAsset,
-            npc.x * TILE_SIZE,
-            (npc.y - 0.5) * TILE_SIZE,
+            npc.x * TILE_SIZE + shakeX,
+            (npc.y - 0.5) * TILE_SIZE + shakeY,
             TILE_SIZE,
             48
           );
@@ -261,9 +290,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           // Working bubble icon indicator
           if (npc.state === 'working') {
             ctx.fillStyle = 'rgba(0,0,0,0.6)';
-            ctx.fillRect(npc.x * TILE_SIZE + 2, (npc.y - 0.7) * TILE_SIZE, 28, 4);
+            ctx.fillRect(npc.x * TILE_SIZE + 2 + shakeX, (npc.y - 0.7) * TILE_SIZE + shakeY, 28, 4);
             ctx.fillStyle = '#eab308'; // Amber progress
-            ctx.fillRect(npc.x * TILE_SIZE + 2, (npc.y - 0.7) * TILE_SIZE, (npc.actionProgress / 100) * 28, 4);
+            ctx.fillRect(npc.x * TILE_SIZE + 2 + shakeX, (npc.y - 0.7) * TILE_SIZE + shakeY, (npc.actionProgress / 100) * 28, 4);
           }
 
           // Cargo delivery tag
@@ -271,19 +300,19 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             ctx.fillStyle = '#4ade80';
             ctx.strokeStyle = '#1e3a8a';
             ctx.lineWidth = 1;
-            ctx.strokeRect(npc.x * TILE_SIZE + 26, (npc.y - 0.3) * TILE_SIZE, 6, 6);
-            ctx.fillRect(npc.x * TILE_SIZE + 26, (npc.y - 0.3) * TILE_SIZE, 6, 6);
+            ctx.strokeRect(npc.x * TILE_SIZE + 26 + shakeX, (npc.y - 0.3) * TILE_SIZE + shakeY, 6, 6);
+            ctx.fillRect(npc.x * TILE_SIZE + 26 + shakeX, (npc.y - 0.3) * TILE_SIZE + shakeY, 6, 6);
           }
 
           // Farmer water tank badge
           if (npc.role === 'farmer' && npc.waterLevel > 0) {
             ctx.fillStyle = '#38bdf8';
             ctx.beginPath();
-            ctx.arc(npc.x * TILE_SIZE + 4, (npc.y - 0.1) * TILE_SIZE, 2.5, 0, Math.PI * 2);
+            ctx.arc(npc.x * TILE_SIZE + 4 + shakeX, (npc.y - 0.1) * TILE_SIZE + shakeY, 2.5, 0, Math.PI * 2);
             ctx.fill();
             if (npc.waterLevel > 1) {
               ctx.beginPath();
-              ctx.arc(npc.x * TILE_SIZE + 4, (npc.y + 0.1) * TILE_SIZE, 2.5, 0, Math.PI * 2);
+              ctx.arc(npc.x * TILE_SIZE + 4 + shakeX, (npc.y + 0.1) * TILE_SIZE + shakeY, 2.5, 0, Math.PI * 2);
               ctx.fill();
             }
           }

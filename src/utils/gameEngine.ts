@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { NPC, NPCRole, NPCState, ToolTier, ResourceType, CropPlot, ResourceNode, Inventory, GridPos, CropStage, Direction, CropType } from '../types';
+import { NPC, NPCRole, NPCState, ToolTier, ResourceType, CropPlot, ResourceNode, Inventory, GridPos, CropStage, Direction, CropType, RESOURCE_LIMITS, getNodeRegenTicks } from '../types';
 import { GRID_WIDTH, GRID_HEIGHT, CROPS, TIER_BENEFITS, generateInitialMap, generateInitialResourceNodes, generateInitialCropPlots } from '../data';
 import { findPath, findNearestPassableAdjacent } from './pathfinding';
 
@@ -55,6 +55,13 @@ export class GameEngine {
   public totalCropsHarvested: number = 0;
   public totalTreesChopped: number = 0;
   public totalOresMined: number = 0;
+  public consumedItems: Record<string, number> = {
+    potato: 0,
+    tomato: 0,
+    onion: 0,
+    chili: 0,
+    eggplant: 0,
+  };
 
   constructor(savedInventory?: Inventory) {
     this.mapTiles = generateInitialMap();
@@ -83,6 +90,47 @@ export class GameEngine {
     this.spawnNPC('farmer', 'Barny');
     this.spawnNPC('lumberjack', 'Jack');
     this.spawnNPC('miner', 'Rocky');
+  }
+
+  /**
+   * Safe resource consumption utility.
+   * Checks if all specified resources exist in inventory in sufficient quantities,
+   * consumes them if they do, and returns true. If insufficient, returns false.
+   */
+  public consumeResources(costs: Partial<Inventory>): boolean {
+    // 1. Verify enough resources exist for all specified costs
+    for (const [key, amount] of Object.entries(costs)) {
+      const invKey = key as keyof Inventory;
+      const currentAmount = this.inventory[invKey] || 0;
+      const costAmount = amount || 0;
+      if (currentAmount < costAmount) {
+        return false;
+      }
+    }
+
+    // 2. Safely deduct the costs (preventing negative resource counts)
+    for (const [key, amount] of Object.entries(costs)) {
+      const invKey = key as keyof Inventory;
+      const costAmount = amount || 0;
+      this.inventory[invKey] = Math.max(0, (this.inventory[invKey] || 0) - costAmount);
+    }
+    return true;
+  }
+
+  /**
+   * Safe resource increase utility.
+   * Respects maximum storage thresholds set per resource inside RESOURCE_LIMITS.
+   * Returns the exact amount successfully added to inventory.
+   */
+  public addResource(key: keyof Inventory, amount: number): number {
+    const current = this.inventory[key] || 0;
+    const limit = RESOURCE_LIMITS[key] || 99999;
+    if (current >= limit) {
+      return 0;
+    }
+    const added = Math.min(amount, limit - current);
+    this.inventory[key] = current + added;
+    return added;
   }
 
   // Create an NPC
@@ -419,7 +467,8 @@ export class GameEngine {
     if (plot.cropType === null) {
       // Choose available seed to plant
       let seedToPlant: CropType | null = null;
-      const seedTypes: { key: string; type: CropType }[] = [
+      let seedKeyToDeduct: keyof Inventory | null = null;
+      const seedTypes: { key: keyof Inventory; type: CropType }[] = [
         { key: 'eggplantSeed', type: 'eggplant' },
         { key: 'chiliSeed', type: 'chili' },
         { key: 'onionSeed', type: 'onion' },
@@ -428,15 +477,25 @@ export class GameEngine {
       ];
 
       for (const st of seedTypes) {
-        if (this.inventory[st.key as keyof Inventory] > 0) {
-          (this.inventory[st.key as keyof Inventory] as number)--;
+        if (this.inventory[st.key] > 0) {
           seedToPlant = st.type;
+          seedKeyToDeduct = st.key;
           break;
         }
       }
 
       // If no custom premium seeds and potato seeds are empty, do not plant (needs manual seed purchase)
-      if (!seedToPlant) {
+      if (!seedToPlant || !seedKeyToDeduct) {
+        this.addFloatingText(plot.x, plot.y - 0.5, 'No seeds left! 🚫', '#ef4444');
+        npc.state = 'idle';
+        npc.targetNodeId = null;
+        npc.targetNodeType = null;
+        return;
+      }
+
+      // Consume seed using unified consumeResources helper
+      const consumed = this.consumeResources({ [seedKeyToDeduct]: 1 });
+      if (!consumed) {
         this.addFloatingText(plot.x, plot.y - 0.5, 'No seeds left! 🚫', '#ef4444');
         npc.state = 'idle';
         npc.targetNodeId = null;
@@ -543,7 +602,7 @@ export class GameEngine {
     this.addFloatingText(node.x, node.y - 0.5, `Collected ${label}!`, '#cbd5e1');
 
     if (node.amount <= 0) {
-      node.regenTicks = node.type.includes('tree') ? 360 : 480; // Respawn frames
+      node.regenTicks = getNodeRegenTicks(node.type); // Realistic respawn duration (up to 100s)
     }
 
     npc.state = 'returning';
@@ -553,7 +612,8 @@ export class GameEngine {
   private deliverNPCResources(npc: NPC) {
     if (npc.cargo) {
       const cargo = npc.cargo;
-      (this.inventory[cargo.type as keyof Inventory] as number) += cargo.amount;
+      const key = cargo.type as keyof Inventory;
+      const added = this.addResource(key, cargo.amount);
 
       let color = '#22c55e';
       let icon = '';
@@ -565,13 +625,19 @@ export class GameEngine {
       else if (cargo.type === 'gold_ore') { color = '#eab308'; icon = '✨'; }
       else { color = '#a855f7'; icon = '🧺'; }
 
-      this.addFloatingText(npc.x, npc.y - 0.6, `+${cargo.amount} Delivered ${icon}`, color);
+      if (added === 0) {
+        this.addFloatingText(npc.x, npc.y - 0.6, `Warehouse Full! 🚫`, '#ef4444');
+      } else if (added < cargo.amount) {
+        this.addFloatingText(npc.x, npc.y - 0.6, `+${added} Delivered (Maxed) ${icon}`, color);
+        // Automatic sale proportional to the amount successfully added
+        this.autoSellCargo(cargo.type, added);
+      } else {
+        this.addFloatingText(npc.x, npc.y - 0.6, `+${cargo.amount} Delivered ${icon}`, color);
+        // Automatic sale of the delivered goods
+        this.autoSellCargo(cargo.type, cargo.amount);
+      }
+      
       npc.cargo = null;
-
-      // Sell automatically if configured or just accumulate in inventory
-      // We will automatically process mined rare ores and crops into GOLD COINS 
-      // immediately at the shop area to make compiling profit compounding seamless!
-      this.autoSellCargo(cargo.type, cargo.amount);
     }
 
     npc.state = 'idle';
@@ -594,9 +660,13 @@ export class GameEngine {
     }
 
     if (goldValue > 0) {
-      this.inventory.gold += goldValue;
-      this.totalGoldEarned += goldValue;
-      this.addFloatingText(16, 4.5, `+${goldValue}g Earned! 💰`, '#eab308');
+      const addedGold = this.addResource('gold', goldValue);
+      if (addedGold > 0) {
+        this.totalGoldEarned += addedGold;
+        this.addFloatingText(16, 4.5, `+${addedGold}g Earned! 💰`, '#eab308');
+      } else {
+        this.addFloatingText(16, 4.5, `Gold Coins Full! 🪙`, '#ef4444');
+      }
     }
   }
 

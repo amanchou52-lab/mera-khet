@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { GameEngine } from '../utils/gameEngine';
 import { CROPS, TIER_BENEFITS } from '../data';
-import { NPCRole, ToolTier, CropType } from '../types';
+import { NPCRole, ToolTier, CropType, RESOURCE_LIMITS, Inventory } from '../types';
 import { ShoppingBag, Star, Zap, UserPlus, Coins, ShieldCheck, ArrowRight, Hammer } from 'lucide-react';
 
 interface ShopPanelProps {
@@ -54,12 +54,14 @@ export const ShopPanel: React.FC<ShopPanelProps> = ({ engine, onUpdate }) => {
     const woodCost = getToolCost(role, 'wood');
     const stoneCost = getToolCost(role, 'stone');
 
-    // Cost validations
-    if (engine.inventory.gold >= goldCost && engine.inventory.wood >= woodCost && engine.inventory.stone >= stoneCost) {
-      engine.inventory.gold -= goldCost;
-      engine.inventory.wood -= woodCost;
-      engine.inventory.stone -= stoneCost;
+    // Cost validations & uniform consumption
+    const success = engine.consumeResources({
+      gold: goldCost,
+      wood: woodCost,
+      stone: stoneCost,
+    });
 
+    if (success) {
       // Apply Upgrade
       engine.toolTiers[role] = nextTier;
       
@@ -96,15 +98,8 @@ export const ShopPanel: React.FC<ShopPanelProps> = ({ engine, onUpdate }) => {
 
   const handleHireNPC = (role: NPCRole) => {
     const costs = getHireCosts(role);
-    if (
-      engine.inventory.gold >= costs.gold &&
-      engine.inventory.wood >= costs.wood &&
-      engine.inventory.stone >= costs.stone
-    ) {
-      engine.inventory.gold -= costs.gold;
-      engine.inventory.wood -= costs.wood;
-      engine.inventory.stone -= costs.stone;
-      
+    const success = engine.consumeResources(costs);
+    if (success) {
       // spawn!
       engine.spawnNPC(role);
       onUpdate();
@@ -116,13 +111,19 @@ export const ShopPanel: React.FC<ShopPanelProps> = ({ engine, onUpdate }) => {
   // Buy seed packages
   const handleBuySeed = (cropName: CropType) => {
     const cropInfo = CROPS[cropName];
-    if (engine.inventory.gold >= cropInfo.seedCost) {
-      engine.inventory.gold -= cropInfo.seedCost;
-      
+    const seedKey = `${cropName}Seed` as keyof Inventory;
+    const currentSeeds = engine.inventory[seedKey] || 0;
+    const limit = RESOURCE_LIMITS[seedKey];
+
+    if (currentSeeds >= limit) {
+      engine.addFloatingText(16, 4, `Seed Storage Full! 🚫`, '#ef4444');
+      return;
+    }
+
+    const success = engine.consumeResources({ gold: cropInfo.seedCost });
+    if (success) {
       // increment corresponding seed inventory
-      const seedKey = `${cropName}Seed`;
-      (engine.inventory[seedKey as keyof typeof engine.inventory] as number)++;
-      
+      engine.inventory[seedKey]++;
       engine.addFloatingText(16, 4, `Bought ${cropInfo.name} Seed! 🌱`, '#4ade80');
       onUpdate();
     } else {
@@ -133,10 +134,20 @@ export const ShopPanel: React.FC<ShopPanelProps> = ({ engine, onUpdate }) => {
   // Sell Raw Excess materials (Emergency backup)
   const handleSellRaw = (resource: 'wood' | 'stone', value: number) => {
     const amount = engine.inventory[resource];
+    const goldLimit = RESOURCE_LIMITS.gold;
+    const currentGold = engine.inventory.gold;
+
+    if (currentGold >= goldLimit) {
+      engine.addFloatingText(16, 4.5, `Gold Coins Full! 🪙`, '#ef4444');
+      return;
+    }
+
     if (amount > 0) {
       engine.inventory[resource]--;
-      engine.inventory.gold += value;
-      engine.addFloatingText(16, 4.5, `+${value}g Gold! 🪙`, '#eab308');
+      const addedGold = engine.addResource('gold', value);
+      if (addedGold > 0) {
+        engine.addFloatingText(16, 4.5, `+${addedGold}g Gold! 🪙`, '#eab308');
+      }
       onUpdate();
     }
   };
