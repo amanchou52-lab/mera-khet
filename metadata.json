@@ -1,0 +1,6 @@
+{
+  "name": "Pixel Colony",
+  "description": "A retro 2D top-down simulation and colony management game where you manage NPCs, farm crops, harvest logs, mine precious ores, and upgrade tools to grow your settlement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
